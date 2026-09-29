@@ -12,8 +12,8 @@ import java.security.MessageDigest;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
-
-/** Local family storage. Every encrypted file gets its own fingerprint namespace. */
+a
+/** Local family storage a. Every encrypted file gets its own fingerprint namespace. */
 public final class DataRepository {
     public interface Progress { void onProgress(int done, int total); }
     private static final String PREFS = "family-tree-local";
