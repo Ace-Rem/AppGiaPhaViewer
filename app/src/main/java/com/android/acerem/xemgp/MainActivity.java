@@ -1,3 +1,19 @@
 package com.android.acerem.xemgp;
-import android.app.*;import android.content.*;import android.os.Bundle;import com.android.acerem.xemgp.data.DataRepository;import com.android.acerem.xemgp.ui.*;
-public class MainActivity extends Activity { protected void onCreate(Bundle b){super.onCreate(b);String fp=DataRepository.currentFingerprint(this);Intent i=new Intent(this,(fp!=null&&DataRepository.dataFile(this)!=null&&DataRepository.dataFile(this).isFile())?LoginActivity.class:ImportActivity.class);startActivity(i);finish();} }
+
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import com.android.acerem.xemgp.auth.AuthManager;
+import com.android.acerem.xemgp.ui.DataSyncActivity;
+import com.android.acerem.xemgp.ui.StartupLoadingActivity;
+
+public class MainActivity extends Activity {
+    @Override protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        Class<?> destination = AuthManager.hasRememberedSession(this)
+                ? StartupLoadingActivity.class
+                : DataSyncActivity.class;
+        startActivity(new Intent(this, destination));
+        finish();
+    }
+}

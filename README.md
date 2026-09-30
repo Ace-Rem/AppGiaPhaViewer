@@ -1,6 +1,51 @@
 # Xem Gia Phả — Android offline
 
-Ứng dụng Android native Java/Gradle trong Android Studio cho `family-tree-viewer`. Ứng dụng không dùng WebView, server, Firebase, analytics hay quyền Internet. Toàn bộ import, giải mã, tìm kiếm và render cây chạy trên thiết bị.
+Ứng dụng Android native Java/Gradle cho `family-tree-viewer`. Dữ liệu được tải bằng HTTPS, giải mã và đọc hoàn toàn trên thiết bị; app vẫn hoạt động offline sau lần tải đầu tiên.
+
+## Cấu hình Google Drive
+
+App chỉ cần biết một URL cố định: URL công khai của `update.txt`. Thay duy nhất hằng số `UPDATE_URL` trong [DataSyncConfig.java](app/src/main/java/com/android/acerem/xemgp/data/DataSyncConfig.java):
+
+```java
+public static final String UPDATE_URL =
+        "https://drive.google.com/uc?export=download&id=UPDATE_FILE_ID";
+```
+
+Không đặt URL/file ID của `data.enc` hoặc `images.zip` trong APK. Hai URL này nằm trong `update.txt` và có thể thay đổi mà không cần build APK mới.
+
+Nội dung `update.txt`:
+
+```text
+# Dòng bắt đầu bằng # là comment
+version=1
+data=https://drive.google.com/uc?export=download&id=DATA_FILE_ID
+images=https://drive.google.com/uc?export=download&id=IMAGES_FILE_ID
+```
+
+Nếu phiên bản không có ảnh, để trống:
+
+```text
+version=2
+data=https://drive.google.com/uc?export=download&id=DATA_FILE_ID
+images=
+```
+
+Mỗi file cần được chia sẻ công khai với quyền Viewer. Bộ tải chuyển URL Google Drive về request tải file, xử lý redirect/confirmation nếu Google yêu cầu, chống cache cho `update.txt` và từ chối HTML/trang lỗi.
+
+Không cần Google API, API key, OAuth hay backend. `data.enc` phải là file blob/encrypted file thông thường; không dùng Google Docs/Sheets/Slides export.
+
+## Luồng cập nhật
+
+Khi mở app, `DataSyncManager` kiểm tra mạng, tải `update.txt` với request no-cache và query chống cache, parse version cùng hai URL rồi so sánh với version local.
+
+- Remote version bằng hoặc thấp hơn local: dùng dữ liệu local.
+- Remote version cao hơn: tải `data.enc` và `images.zip` vào file tạm.
+- Chỉ sau khi envelope, ZIP và quá trình giải mã/xử lý hợp lệ mới cài dữ liệu và ghi version local.
+- Nếu lỗi, file tạm bị xóa và dữ liệu local cũ vẫn được giữ nguyên.
+- Nếu `images=`, ảnh local hiện tại được giữ lại khi chuyển sang fingerprint dữ liệu mới.
+- Không có Internet vẫn dùng dữ liệu local hợp lệ; cài mới không có dữ liệu sẽ yêu cầu kết nối.
+
+Để phát hành bản cập nhật: upload file mới lên Google Drive, lấy link tải công khai, sửa các dòng `data=`/ `images=` trong `update.txt`, tăng `version`, rồi lưu `update.txt`. Không cần backend hoặc server chạy 24/7.
 
 ## Build
 
@@ -12,37 +57,8 @@
 ./gradlew assembleDebug
 ```
 
-APK debug tạo tại `app/build/outputs/apk/debug/app-debug.apk`.
+## Bảo toàn dữ liệu hiện tại
 
-## Tương thích Web Viewer
+Cơ chế envelope AES-GCM, PBKDF2, mật khẩu, schema plaintext sau giải mã, database/model, Login, Viewer và xử lý ảnh root-level (`webp`, `jpg/jpeg`, `png`) được giữ nguyên. `DataRepository` vẫn quản lý fingerprint local và commit file tải xuống an toàn.
 
-Các file đã đọc và port trực tiếp:
-
-- `family-tree-viewer/crypto.js`: envelope `v: 1`, `AES-GCM`, PBKDF2-HMAC-SHA256, 210.000 vòng mặc định, AES-256, IV 12 byte và GCM tag 128 bit.
-- `family-tree-viewer/auth.js`: giải mã trước, kiểm tra `auth.username` sau đó mới mở family; các tham chiếu member được kiểm tra như Web Viewer.
-- `family-tree-viewer/tree.js`: quan hệ cha/mẹ/con, spouse, sibling, generation 1-based, `siblingOrder`, `generationOffset`, filter dòng họ và generation navigation.
-- `family-tree-viewer/member-image.js`: bỏ dấu tiếng Việt, hạ chữ, bỏ ký tự ngoài `[a-z0-9]`, nối năm sinh và dùng `.webp`.
-- `family-tree-viewer/sibling-role.js`: quy tắc họ, family role và sibling grouping.
-- `index.html` và `styles.css`: palette heritage tối, card, border, hierarchy và các tương tác được thiết kế lại thành native Android.
-
-Android đọc schema plaintext sau giải mã trực tiếp, không tạo schema `.enc` mới. Các trường chính gồm `auth`, `family`, `members`, `fatherId`, `motherId`, `spouseIds`, `siblingIds`, `siblingOrder`, `generation`, `familyRole` và các field profile.
-
-## Luồng sử dụng
-
-1. Chọn file dữ liệu `.enc` bắt buộc.
-2. Có thể chọn thêm `.zip` ảnh; ZIP chỉ nhận ảnh ở root (`webp`, `jpg/jpeg`, `png`).
-3. Ảnh được validate bằng `BitmapFactory`, giải nén vào thư mục tạm rồi commit atomic vào `files/families/<sha256>/images/`. ZIP không được đọc lại ở lần mở app sau.
-4. Nhập username/password được lưu trong file sau khi giải mã.
-5. Viewer hỗ trợ Canvas tree, pan, zoom, pinch, tap/double-tap, fit, generation rail, filter, tìm kiếm không dấu, profile bottom sheet và bấm quan hệ để focus.
-
-Ảnh thiếu hoặc hỏng dùng initials; không tạo broken-image icon. Các family khác nhau có namespace fingerprint riêng nên không dùng nhầm ảnh.
-
-## Remember login và bảo mật
-
-Password không được lưu. Khi bật **Ghi nhớ đăng nhập**, Android derive AES key bằng đúng PBKDF2 của Web Viewer, sau đó mã hóa key đó bằng AES-GCM key trong Android Keystore và chỉ lưu ciphertext/IV, username và fingerprint. Session chỉ restore nếu fingerprint file hiện tại khớp. Đổi `.enc` sẽ xóa session cũ và yêu cầu đăng nhập lại.
-
-Logout xóa session nhớ và object family trong memory nhưng không xóa `data.enc` hoặc ảnh local. Ảnh nằm trong private app storage, không xuất hiện trong Gallery. Gỡ app sẽ xóa local storage theo Android.
-
-## Giới hạn kiểm thử
-
-Project đã được xác minh bằng `:app:compileDebugJavaWithJavac` và `:app:assembleDebug`. Workspace có `family-tree-viewer/data.enc`, nhưng không chứa password kiểm thử; vì vậy không thể thực hiện đăng nhập thực tế vào payload mẫu trong môi trường này. Khi có password hợp lệ, nên kiểm tra parity member/generation/relationships giữa web và Android trên cùng file.
+Ảnh vẫn được lưu ở `files/families/<sha256>/images/`; session ghi nhớ vẫn bị vô hiệu khi fingerprint dữ liệu đổi.

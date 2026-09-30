@@ -1,3 +1,5 @@
 <resources>
-    <color name="heritage_bg">#141B18</color><color name="heritage_surface">#202B26</color><color name="heritage_surface_raised">#26332D</color><color name="heritage_surface_muted">#2B3831</color><color name="heritage_text">#E7E9DF</color><color name="heritage_text_strong">#FBFAF3</color><color name="heritage_muted">#A2AAA0</color><color name="heritage_line">#3A4840</color><color name="heritage_accent">#A7C5A3</color><color name="heritage_accent_dark">#31463A</color><color name="heritage_copper">#E42121</color><color name="heritage_danger">#E09B8D</color><color name="white">#FFFFFFFF</color>
+    <color name="heritage_bg">#171717</color><color name="heritage_surface">#1B1B1B</color><color name="heritage_surface_raised">#252525</color><color name="heritage_surface_muted">#303030</color><color name="heritage_text">#E7E9DF</color><color name="heritage_text_strong">#FBFAF3</color><color name="heritage_muted">#A2AAA0</color><color name="heritage_line">#3A3A3A</color><color name="heritage_accent">#A7C5A3</color><color name="heritage_accent_dark">#171717</color><color name="heritage_copper">#E42121</color><color name="heritage_danger">#E09B8D</color><color name="white">#FFFFFFFF</color>
 </resources>
+
+

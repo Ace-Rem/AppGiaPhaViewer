@@ -1,0 +1,22 @@
+QUY TẮC CHUYỂN LINK GOOGLE DRIVE:
+
+Nếu URL có dạng:
+
+https://drive.google.com/file/d/FILE_ID/view?usp=drive_link
+
+thì lấy chuỗi FILE_ID nằm giữa "/d/" và "/view".
+
+Sau đó tạo URL tải trực tiếp theo công thức:
+
+https://drive.google.com/uc?export=download&id=FILE_ID
+
+Ví dụ:
+
+Input:
+https://drive.google.com/file/d/ABC123/view?usp=drive_link
+
+Output:
+https://drive.google.com/uc?export=download&id=ABC123
+
+Không sử dụng nguyên URL "/file/d/.../view" làm URL tải dữ liệu.
+Không nối thêm tên file vào URL Google Drive.
