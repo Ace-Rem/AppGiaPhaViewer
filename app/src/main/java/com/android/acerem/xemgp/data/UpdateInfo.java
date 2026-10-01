@@ -57,7 +57,8 @@ public final class UpdateInfo {
             catch (NumberFormatException error) { throw new IllegalArgumentException("update-data-size-invalid", error); }
             if (dataSize <= 0) throw new IllegalArgumentException("update-data-size-invalid");
         }
-        if (version < 0 || !isHttpUrl(dataValue) || (!imagesValue.isEmpty() && !isHttpUrl(imagesValue))
+        if (version < 0 || !isHttpUrl(dataValue)
+                || (!imagesValue.isEmpty() && !isHttpUrl(imagesValue))
                 || (hashValue != null && !hashValue.matches("[a-f0-9]{64}"))) {
             throw new IllegalArgumentException("update-values-invalid");
         }

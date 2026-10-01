@@ -22,7 +22,7 @@ public final class Member {
     }
     private static String nullable(JSONObject o,String k){return o.isNull(k)?null:(o.has(k)?o.optString(k,null):null);}
     private static void copyIds(JSONArray a,List<String> out){if(a==null)return;for(int i=0;i<a.length();i++){String v=a.optString(i,null);if(v!=null&&!v.isEmpty()&&!out.contains(v))out.add(v);}}
-    public String birthYear(){return birthDate != null && birthDate.matches("^\\d{4}.*") ? birthDate.substring(0,4) : "";}
-    public String lifeDates(){String b=birthYear(),d=deathDate!=null&&deathDate.matches("^\\d{4}.*")?deathDate.substring(0,4):"";if(b.isEmpty()&&d.isEmpty())return "Chưa rõ năm sinh";if(!b.isEmpty()&&!d.isEmpty())return b+" — "+d;return b+" — nay";}
+    public String birthYear(){return ImageFilenameResolver.birthYear(birthDate);}
+    public String lifeDates(){String b=birthYear(),d=ImageFilenameResolver.birthYear(deathDate);if(b.isEmpty()&&d.isEmpty())return "Chưa rõ năm sinh";if(!b.isEmpty()&&!d.isEmpty())return b+" — "+d;return b+" — nay";}
     public String initials(){String[] p=fullName.trim().split("\\s+");String out="";for(int i=Math.max(0,p.length-2);i<p.length;i++)if(!p[i].isEmpty())out+=p[i].substring(0,1).toUpperCase();return out.isEmpty()?"?":out;}
 }

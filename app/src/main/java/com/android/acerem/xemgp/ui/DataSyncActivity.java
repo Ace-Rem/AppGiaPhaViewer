@@ -59,7 +59,9 @@ public final class DataSyncActivity extends Activity {
     private void finishSync(DataSyncManager.Result result) {
         status.setText(result.message);
         if (result.ready) {
-            startActivity(new Intent(this, LoginActivity.class));
+            Intent intent = new Intent(this, LoginActivity.class);
+            intent.putExtra(LoginActivity.EXTRA_ONLINE_SYNC, result.online);
+            startActivity(intent);
             finish();
         } else {
             retry.setVisibility(android.view.View.VISIBLE);

@@ -7,7 +7,7 @@ Cloudflare Worker /version
     ↓ dataVersion/version
 Cloudflare Worker /data?version=<VERSION>
     ↓ thất bại ở bất kỳ bước nào
-Google Drive update.txt → data.enc (+ images.zip nếu có)
+Google Drive update.txt → data.enc
     ↓ thất bại
 Error → Thử lại
 ```
@@ -31,10 +31,25 @@ Google Drive chỉ được thử sau khi Cloudflare thất bại. App tải man
 ```text
 version=1
 data=https://drive.google.com/uc?export=download&id=DATA_FILE_ID
-images=https://drive.google.com/uc?export=download&id=IMAGES_FILE_ID
 ```
 
-`images=` có thể để trống. Có thể thêm `dataSize=` và `contentHash=` để kiểm tra integrity cho Google Drive. Bộ tải xử lý redirect/confirmation của Drive, chống cache và từ chối HTML/trang lỗi. Không có file picker hoặc nhập `data.enc`/ZIP thủ công.
+Google Drive là fallback ảnh thứ hai: chỉ khi Cloudflare không lấy được bất kỳ ảnh usable nào, Android mới đọc `images=` trong manifest và tải/giải nén ZIP ảnh. Nếu Cloudflare lấy được dù chỉ một ảnh, Google Drive sẽ không được gọi. Có thể thêm `dataSize=` và `contentHash=` để kiểm tra integrity cho Google Drive. Bộ tải xử lý redirect/confirmation của Drive, chống cache, từ chối HTML/trang lỗi và chỉ nhận các file ảnh khớp tên thành viên. Không có file picker hoặc nhập `data.enc`/ZIP thủ công. Sau khi data.enc và ảnh được tải, chúng được lưu trong bộ nhớ riêng của app để Viewer hoạt động offline.
+
+## Ảnh thành viên từ Cloudflare R2
+
+Android tạo filename bằng `ImageFilenameResolver`, sau đó tải ảnh công khai qua:
+
+```text
+https://family-tree-api.acerem.workers.dev/images/<filename>.webp
+```
+
+Để tránh tạo một request kiểm tra cho từng thành viên, Worker nên cung cấp thêm
+`GET /images/manifest` với dạng `{ "images": [{ "filename": "...webp", "size": 48231, "sha256": "..." }] }`.
+Android sẽ dùng manifest để so sánh local và chỉ tải ảnh mới/thay đổi. Nếu
+endpoint này chưa được triển khai, Android vẫn có fallback `HEAD` từng ảnh;
+fallback này chỉ là tương thích tạm thời và không ảnh hưởng hiển thị offline.
+
+UI không tạo URL Worker và không request ảnh khi đang xem cây/profile. Sau khi data.enc được giải mã, Viewer mở ngay; ImageRepository tải ảnh âm thầm bằng sáu worker nền và phát tín hiệu để cây/profile tự cập nhật khi file sẵn sàng. TreeCanvasView và profile chỉ gọi ImageRepository.loadLocal(), decode thumbnail theo kích thước cần thiết bằng executor/LRU memory cache; thiếu file thì dùng initials/avatar. Vì file nằm trong app-specific internal storage, cây và profile vẫn hiển thị offline.
 
 ## Mã hóa và đăng nhập
 

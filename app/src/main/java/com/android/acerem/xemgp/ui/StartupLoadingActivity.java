@@ -14,6 +14,8 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import com.android.acerem.xemgp.auth.AuthManager;
 import com.android.acerem.xemgp.data.DataSyncManager;
+import com.android.acerem.xemgp.data.FamilyData;
+import com.android.acerem.xemgp.data.ImageRepository;
 import com.android.acerem.xemgp.util.Ui;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -94,6 +96,21 @@ public final class StartupLoadingActivity extends Activity {
         retry.setVisibility(View.GONE);
         setStatus("Đang kiểm tra dữ liệu…");
         executor.execute(() -> {
+            // A remembered session with valid local data opens immediately.
+            // ImageRepository performs only a background refresh afterwards.
+            if (DataSyncManager.hasUsableLocalData(this)) {
+                try {
+                    FamilyData data = AuthManager.restore(this);
+                    ImageRepository repository = ImageRepository.get(getApplicationContext());
+                    repository.prepareFamilyIndex(data);
+                    repository.printImageStorageStatus();
+                    repository.syncForFamilyAsync(data);
+                    postToScreen(this::openViewer);
+                    return;
+                } catch (Exception localSessionError) {
+                    // Fall through to the normal source sync/login recovery.
+                }
+            }
             DataSyncManager.Result result = DataSyncManager.sync(this, this::setStatus);
             if (!result.ready) {
                 postToScreen(() -> {
@@ -104,7 +121,13 @@ public final class StartupLoadingActivity extends Activity {
             }
             postToScreen(() -> setStatus("Đang khôi phục phiên đăng nhập…"));
             try {
-                AuthManager.restore(this);
+                FamilyData data = AuthManager.restore(this);
+                ImageRepository repository = ImageRepository.get(getApplicationContext());
+                repository.prepareFamilyIndex(data);
+                repository.printImageStorageStatus();
+                if (result.online) {
+                    repository.syncForFamilyAsync(data);
+                }
                 postToScreen(this::openViewer);
             } catch (Exception invalidSession) {
                 AuthManager.clearActive();

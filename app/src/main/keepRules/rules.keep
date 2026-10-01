@@ -10,3 +10,10 @@
 #-keepclassmembers class fqcn.of.javascript.interface.for.webview {
 #   public *;
 #}
+
+# These classes are invoked from Activity worker lambdas and must remain in
+# every APK variant, including release builds that enable shrinking.
+-keep class com.android.acerem.xemgp.data.DataSyncManager { *; }
+-keep class com.android.acerem.xemgp.data.DataSyncManager$* { *; }
+-keep class com.android.acerem.xemgp.data.ImageRepository { *; }
+-keep class com.android.acerem.xemgp.data.ImageRepository$* { *; }

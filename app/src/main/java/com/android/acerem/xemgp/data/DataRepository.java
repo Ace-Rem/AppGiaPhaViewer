@@ -1,7 +1,6 @@
 package com.android.acerem.xemgp.data;
 
 import android.content.Context;
-import android.graphics.BitmapFactory;
 import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -9,15 +8,11 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /** Local family storage. Every encrypted file gets its own fingerprint namespace. */
 public final class DataRepository {
-    public interface Progress { void onProgress(int done, int total); }
     private static final String PREFS = "family-tree-local";
     private static final String CURRENT = "current-family";
-    private static final long MAX_IMAGE_BYTES = 50L * 1024 * 1024;
     private DataRepository() {}
 
     public static File root(Context c) { File f = new File(c.getFilesDir(), "families"); if (!f.exists()) f.mkdirs(); return f; }
@@ -25,8 +20,6 @@ public final class DataRepository {
     public static void setCurrentFingerprint(Context c, String fp) { c.getSharedPreferences(PREFS, 0).edit().putString(CURRENT, fp).apply(); }
     public static File familyDir(Context c, String fp) { return new File(root(c), fp); }
     public static File dataFile(Context c) { String fp = currentFingerprint(c); return fp == null ? null : new File(familyDir(c, fp), "data.enc"); }
-    public static File imageDir(Context c) { String fp = currentFingerprint(c); return fp == null ? null : new File(familyDir(c, fp), "images"); }
-    public static File imageFile(Context c, String fp, String filename) { return new File(new File(familyDir(c, fp), "images"), filename); }
     public static void validateEnvelope(String text) throws Exception {
         JSONObject e = new JSONObject(text);
         if (e.optInt("v", -1) != 1 || !"AES-GCM".equals(e.optString("algorithm"))
@@ -40,8 +33,8 @@ public final class DataRepository {
         if (salt.length == 0 || iv.length == 0 || ciphertext.length == 0) throw new IllegalArgumentException("invalid-envelope");
     }
 
-    /** Commits a downloaded file only after validation and optional image processing succeed. */
-    public static String installDownloaded(Context c, File downloadedData, File downloadedImages, Progress progress) throws Exception {
+    /** Commits encrypted data only; ImageRepository owns the separate local image copy. */
+    public static String installDownloaded(Context c, File downloadedData) throws Exception {
         byte[] bytes = readFile(downloadedData);
         validateEnvelope(new String(bytes, StandardCharsets.UTF_8));
         String fp = sha256(bytes);
@@ -50,7 +43,6 @@ public final class DataRepository {
         File temp = new File(dir, ".data-" + UUID.randomUUID());
         try {
             writeBytes(temp, bytes);
-            if (downloadedImages != null) extractImages(c, downloadedImages, fp, progress);
             moveReplace(temp, new File(dir, "data.enc"));
             setCurrentFingerprint(c, fp);
             return fp;
@@ -66,25 +58,6 @@ public final class DataRepository {
     private static void writeBytes(File f, byte[] bytes) throws IOException { try (FileOutputStream out = new FileOutputStream(f)) { out.write(bytes); out.getFD().sync(); } }
     private static String sha256(byte[] bytes) throws Exception { byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes); StringBuilder result = new StringBuilder(); for (byte b : digest) result.append(String.format(Locale.US, "%02x", b)); return result.toString(); }
     private static void moveReplace(File source, File target) throws IOException { if (target.exists() && !target.delete()) throw new IOException("cannot-replace-file"); if (!source.renameTo(target)) { try (InputStream in = new FileInputStream(source); OutputStream out = new FileOutputStream(target)) { byte[] b = new byte[32*1024]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); } if (!source.delete()) throw new IOException("cannot-clean-temp"); } }
-
-    public static int extractImages(Context c, File file, String fp, Progress progress) throws Exception {
-        File family = familyDir(c, fp); if (!family.exists() && !family.mkdirs()) throw new IOException("cannot-create-family");
-        File temp = new File(family, ".images-" + UUID.randomUUID()); if (!temp.mkdirs()) throw new IOException("cannot-create-temp");
-        try {
-            int total=0; try (InputStream raw=new FileInputStream(file); ZipInputStream zip=new ZipInputStream(new BufferedInputStream(raw))) { ZipEntry e; while((e=zip.getNextEntry())!=null) if(!e.isDirectory()&&isRootImage(e.getName())) total++; }
-            int accepted; try (InputStream raw=new FileInputStream(file); ZipInputStream zip=new ZipInputStream(new BufferedInputStream(raw))) { accepted=extractEntries(zip,temp,total,progress); }
-            return commitImages(temp,family,accepted);
-        } finally { deleteTree(temp); }
-    }
-
-    private static int extractEntries(ZipInputStream zip, File temp, int total, Progress progress) throws Exception {
-        int done=0, accepted=0; ZipEntry entry;
-        while((entry=zip.getNextEntry())!=null){ String name=entry.getName(); if(entry.isDirectory()||!isRootImage(name)) continue; File target=new File(temp,name); long size=0; try(FileOutputStream out=new FileOutputStream(target)){byte[] b=new byte[32*1024];int n;while((n=zip.read(b))!=-1){size+=n;if(size>MAX_IMAGE_BYTES)throw new IOException("image-too-large");out.write(b,0,n);}} BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeFile(target.getAbsolutePath(),bounds);if(bounds.outWidth>0&&bounds.outHeight>0)accepted++;else target.delete();done++;if(progress!=null)progress.onProgress(done,total); }
-        return accepted;
-    }
-    private static int commitImages(File temp, File family, int accepted) throws IOException { File live=new File(family,"images");if(!live.exists()&&!live.mkdirs())throw new IOException("cannot-create-images");File[] files=temp.listFiles();if(files!=null)for(File image:files)moveReplace(image,new File(live,image.getName()));return accepted; }
-    private static boolean isRootImage(String name) { if(name==null||name.isEmpty()||name.contains("/")||name.contains("\\")||name.contains(".."))return false;String n=name.toLowerCase(Locale.US);return n.endsWith(".webp")||n.endsWith(".jpg")||n.endsWith(".jpeg")||n.endsWith(".png"); }
-    private static void deleteTree(File f) { if(f==null||!f.exists())return;if(f.isDirectory()){File[] files=f.listFiles();if(files!=null)for(File x:files)deleteTree(x);}f.delete(); }
 
     public static FamilyData parse(String json, String fp) throws Exception {
         JSONObject root=new JSONObject(json);JSONObject auth=root.optJSONObject("auth"),family=root.optJSONObject("family");JSONArray array=root.optJSONArray("members");

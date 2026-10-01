@@ -1,6 +1,9 @@
 package com.android.acerem.xemgp.data;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.util.Log;
 
@@ -27,17 +30,14 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
-/** Strict source order: Cloudflare Worker first, then Google Drive, then error. */
+/** Strict source order: Cloudflare Worker first, then Google Drive, then a local offline copy. */
 public final class DataSyncManager {
     private static final String TAG = "DataSync";
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 45_000;
     private static final long MAX_VERSION_BYTES = 64 * 1024;
     private static final long MAX_DATA_BYTES = 100L * 1024 * 1024;
-    private static final long MAX_IMAGES_ZIP_BYTES = 500L * 1024 * 1024;
     private static final long MAX_HTML_BYTES = 2L * 1024 * 1024;
     private static final Pattern DRIVE_FILE_PATH = Pattern.compile("/file/d/([^/]+)");
     private static final Pattern CONFIRM_TOKEN = Pattern.compile("(?i)[?&]confirm=([^&\"'<>]+)");
@@ -47,25 +47,32 @@ public final class DataSyncManager {
 
     public static final class Result {
         public final boolean ready;
+        public final boolean online;
         public final String message;
 
-        private Result(boolean ready, String message) {
+        private Result(boolean ready, boolean online, String message) {
             this.ready = ready;
+            this.online = online;
             this.message = message;
         }
 
-        public static Result ready(String message) { return new Result(true, message); }
-        public static Result failed(String message) { return new Result(false, message); }
+        public static Result ready(String message) { return new Result(true, true, message); }
+        public static Result offline(String message) { return new Result(true, false, message); }
+        public static Result failed(String message) { return new Result(false, false, message); }
     }
 
     private DataSyncManager() {}
 
     /**
      * A failed Worker attempt is the only condition that permits a Google Drive attempt.
-     * Existing files are never consulted to decide whether either source is skipped.
+     * If both online sources fail, a validated local data.enc may be used offline.
      */
     public static Result sync(Context context, Progress progress) {
         Context app = context.getApplicationContext();
+        if (!isNetworkAvailable(app) && hasUsableLocalData(app)) {
+            send(progress, "Không có mạng. Đang dùng dữ liệu đã đồng bộ trước đó…");
+            return Result.offline("Đang dùng dữ liệu local đã đồng bộ trước đó.");
+        }
         File workDir = new File(app.getFilesDir(), ".data-sync");
         if (!workDir.exists() && !workDir.mkdirs()) return Result.failed("Không thể tạo vùng dữ liệu tạm.");
 
@@ -73,7 +80,6 @@ public final class DataSyncManager {
         File workerData = temp(workDir, ".worker-data-");
         File driveManifest = temp(workDir, ".drive-manifest-");
         File driveData = temp(workDir, ".drive-data-");
-        File driveImages = temp(workDir, ".drive-images-");
         try {
             send(progress, "Đang đồng bộ từ Cloudflare…");
             try {
@@ -85,10 +91,14 @@ public final class DataSyncManager {
 
             send(progress, "Cloudflare không khả dụng. Đang chuyển sang Google Drive…");
             try {
-                syncGoogleDrive(app, progress, driveManifest, driveData, driveImages);
+                syncGoogleDrive(app, progress, driveManifest, driveData);
                 return Result.ready("Đã đồng bộ dữ liệu từ Google Drive.");
             } catch (Exception driveError) {
                 Log.w(TAG, "Google Drive source failed", driveError);
+                if (hasUsableLocalData(app)) {
+                    send(progress, "Không có mạng. Đang dùng dữ liệu đã đồng bộ trước đó…");
+                    return Result.offline("Đang dùng dữ liệu local đã đồng bộ trước đó.");
+                }
                 return Result.failed("Không thể đồng bộ từ Cloudflare hoặc Google Drive. Vui lòng thử lại.");
             }
         } finally {
@@ -96,7 +106,31 @@ public final class DataSyncManager {
             deleteIfExists(workerData);
             deleteIfExists(driveManifest);
             deleteIfExists(driveData);
-            deleteIfExists(driveImages);
+        }
+    }
+
+    public static boolean hasUsableLocalData(Context context) {
+        Context app = context.getApplicationContext();
+        File current = DataRepository.dataFile(app);
+        if (current == null || !current.isFile() || current.length() <= 0) return false;
+        try {
+            DataRepository.validateEnvelope(new String(readFile(current), StandardCharsets.UTF_8));
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private static boolean isNetworkAvailable(Context app) {
+        try {
+            ConnectivityManager manager = (ConnectivityManager) app.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (manager == null) return false;
+            Network network = manager.getActiveNetwork();
+            NetworkCapabilities capabilities = network == null ? null : manager.getNetworkCapabilities(network);
+            return capabilities != null && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+        } catch (SecurityException denied) {
+            Log.w(TAG, "Network state permission unavailable", denied);
+            return false;
         }
     }
 
@@ -111,15 +145,12 @@ public final class DataSyncManager {
         verifyDownloadedData(dataFile, remote.dataSize, remote.expectedHash, true);
         DataRepository.validateEnvelope(new String(readFile(dataFile), StandardCharsets.UTF_8));
 
-        String fingerprint = fingerprint(readFile(dataFile));
-        copyCurrentImages(app, DataRepository.currentFingerprint(app), fingerprint);
         send(progress, "Đang lưu dữ liệu Cloudflare…");
-        DataRepository.installDownloaded(app, dataFile, null,
-                (done, total) -> send(progress, "Đang xử lý ảnh… " + done + " / " + total));
+        DataRepository.installDownloaded(app, dataFile);
     }
 
     private static void syncGoogleDrive(Context app, Progress progress, File manifestFile,
-                                        File dataFile, File imagesFile) throws Exception {
+                                        File dataFile) throws Exception {
         send(progress, "Đang kiểm tra manifest Google Drive…");
         download(DataSyncConfig.UPDATE_URL, manifestFile, MAX_VERSION_BYTES);
         UpdateInfo remote = UpdateInfo.parse(new String(readFile(manifestFile), StandardCharsets.UTF_8));
@@ -129,18 +160,8 @@ public final class DataSyncManager {
         verifyDownloadedData(dataFile, remote.dataSize, remote.contentHash, false);
         DataRepository.validateEnvelope(new String(readFile(dataFile), StandardCharsets.UTF_8));
 
-        boolean hasImages = remote.imagesUrl != null && !remote.imagesUrl.isEmpty();
-        if (hasImages) {
-            send(progress, "Đang tải images.zip từ Google Drive…");
-            download(remote.imagesUrl, imagesFile, MAX_IMAGES_ZIP_BYTES);
-            validateZip(imagesFile);
-        }
-
-        String fingerprint = fingerprint(readFile(dataFile));
-        if (!hasImages) copyCurrentImages(app, DataRepository.currentFingerprint(app), fingerprint);
         send(progress, "Đang kiểm tra và lưu dữ liệu Google Drive…");
-        DataRepository.installDownloaded(app, dataFile, hasImages ? imagesFile : null,
-                (done, total) -> send(progress, "Đang xử lý ảnh… " + done + " / " + total));
+        DataRepository.installDownloaded(app, dataFile);
     }
 
     private static void verifyDownloadedData(File file, long expectedSize, String expectedHash,
@@ -284,20 +305,6 @@ public final class DataSyncManager {
                 || text.startsWith("<head") || text.startsWith("<body");
     }
 
-    private static void validateZip(File file) throws IOException {
-        int entries = 0;
-        try (InputStream raw = new FileInputStream(file);
-             ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                entries++;
-                byte[] buffer = new byte[32 * 1024];
-                while (zip.read(buffer) != -1) { /* read to detect truncated archives */ }
-            }
-        }
-        Log.d(TAG, "images.zip validation passed; entries: " + entries);
-    }
-
     private static byte[] readPrefix(InputStream input, int max) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[max];
@@ -341,25 +348,6 @@ public final class DataSyncManager {
         StringBuilder result = new StringBuilder();
         for (byte b : digest) result.append(String.format(Locale.US, "%02x", b));
         return result.toString();
-    }
-
-    private static void copyCurrentImages(Context context, String oldFingerprint, String newFingerprint) throws IOException {
-        if (oldFingerprint == null || oldFingerprint.equals(newFingerprint)) return;
-        File oldDir = DataRepository.imageDir(context);
-        if (oldDir == null || !oldDir.isDirectory()) return;
-        File newDir = new File(DataRepository.familyDir(context, newFingerprint), "images");
-        if (!newDir.exists() && !newDir.mkdirs()) throw new IOException("cannot-create-images");
-        File[] files = oldDir.listFiles();
-        if (files == null) return;
-        for (File source : files) {
-            if (!source.isFile()) continue;
-            File target = new File(newDir, source.getName());
-            try (InputStream in = new FileInputStream(source); OutputStream out = new FileOutputStream(target)) {
-                byte[] buffer = new byte[32 * 1024];
-                int count;
-                while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-            }
-        }
     }
 
     private static void closeQuietly(Closeable closeable) {
