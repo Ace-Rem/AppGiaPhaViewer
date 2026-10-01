@@ -7,7 +7,6 @@ import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import com.android.acerem.xemgp.data.DataRepository;
 import com.android.acerem.xemgp.data.DataSyncManager;
 import com.android.acerem.xemgp.util.Ui;
 import java.util.concurrent.ExecutorService;

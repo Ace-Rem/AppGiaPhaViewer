@@ -9,11 +9,15 @@ public final class UpdateInfo {
     public final long version;
     public final String dataUrl;
     public final String imagesUrl;
+    public final long dataSize;
+    public final String contentHash;
 
-    private UpdateInfo(long version, String dataUrl, String imagesUrl) {
+    private UpdateInfo(long version, String dataUrl, String imagesUrl, long dataSize, String contentHash) {
         this.version = version;
         this.dataUrl = dataUrl;
         this.imagesUrl = imagesUrl;
+        this.dataSize = dataSize;
+        this.contentHash = contentHash;
     }
 
     public static UpdateInfo parse(String text) {
@@ -21,6 +25,8 @@ public final class UpdateInfo {
         String versionValue = null;
         String dataValue = null;
         String imagesValue = "";
+        String sizeValue = null;
+        String hashValue = null;
         String[] lines = text.split("\\r?\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
@@ -32,6 +38,8 @@ public final class UpdateInfo {
             if ("version".equals(key)) versionValue = value;
             else if ("data".equals(key)) dataValue = value;
             else if ("images".equals(key)) imagesValue = value;
+            else if ("datasize".equals(key)) sizeValue = value;
+            else if ("contenthash".equals(key)) hashValue = value.toLowerCase(Locale.ROOT);
         }
 
         if (versionValue == null || dataValue == null || dataValue.isEmpty()) {
@@ -43,10 +51,17 @@ public final class UpdateInfo {
         } catch (NumberFormatException error) {
             throw new IllegalArgumentException("update-version-invalid", error);
         }
-        if (version < 0 || !isHttpUrl(dataValue) || (!imagesValue.isEmpty() && !isHttpUrl(imagesValue))) {
+        long dataSize = -1;
+        if (sizeValue != null && !sizeValue.isEmpty()) {
+            try { dataSize = Long.parseLong(sizeValue); }
+            catch (NumberFormatException error) { throw new IllegalArgumentException("update-data-size-invalid", error); }
+            if (dataSize <= 0) throw new IllegalArgumentException("update-data-size-invalid");
+        }
+        if (version < 0 || !isHttpUrl(dataValue) || (!imagesValue.isEmpty() && !isHttpUrl(imagesValue))
+                || (hashValue != null && !hashValue.matches("[a-f0-9]{64}"))) {
             throw new IllegalArgumentException("update-values-invalid");
         }
-        return new UpdateInfo(version, dataValue, imagesValue);
+        return new UpdateInfo(version, dataValue, imagesValue, dataSize, hashValue);
     }
 
     private static boolean isHttpUrl(String value) {

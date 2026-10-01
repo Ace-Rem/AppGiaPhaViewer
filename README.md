@@ -1,51 +1,60 @@
-# Xem Gia Phả — Android offline
+# Xem Gia Phả — Android
 
-Ứng dụng Android native Java/Gradle cho `family-tree-viewer`. Dữ liệu được tải bằng HTTPS, giải mã và đọc hoàn toàn trên thiết bị; app vẫn hoạt động offline sau lần tải đầu tiên.
-
-## Cấu hình Google Drive
-
-App chỉ cần biết một URL cố định: URL công khai của `update.txt`. Thay duy nhất hằng số `UPDATE_URL` trong [DataSyncConfig.java](app/src/main/java/com/android/acerem/xemgp/data/DataSyncConfig.java):
-
-```java
-public static final String UPDATE_URL =
-        "https://drive.google.com/uc?export=download&id=UPDATE_FILE_ID";
-```
-
-Không đặt URL/file ID của `data.enc` hoặc `images.zip` trong APK. Hai URL này nằm trong `update.txt` và có thể thay đổi mà không cần build APK mới.
-
-Nội dung `update.txt`:
+Ứng dụng tải dữ liệu bằng HTTPS, giải mã và validate hoàn toàn trên thiết bị. Mỗi lần mở app, flow đồng bộ là:
 
 ```text
-# Dòng bắt đầu bằng # là comment
+Cloudflare Worker /version
+    ↓ dataVersion/version
+Cloudflare Worker /data?version=<VERSION>
+    ↓ thất bại ở bất kỳ bước nào
+Google Drive update.txt → data.enc (+ images.zip nếu có)
+    ↓ thất bại
+Error → Thử lại
+```
+
+Android chỉ gọi Worker public tại `https://family-tree-api.acerem.workers.dev`; APK không chứa R2 access key, secret, Cloudflare API token, publish token hay credential quản trị.
+
+## Cloudflare Worker
+
+`GET /version` phải trả metadata theo contract Worker, gồm `dataVersion` hoặc `version`, cùng `contentHash` và tùy chọn `dataSize`. App dùng `dataVersion` (fallback `version`) để gọi chính xác:
+
+```text
+GET https://family-tree-api.acerem.workers.dev/data?version=<VERSION>
+```
+
+App kiểm tra HTTP status, kích thước khi có `dataSize`, SHA-256, `contentHash`/`version`, encrypted envelope và format AES-GCM trước khi cài dữ liệu. R2 không được truy cập trực tiếp.
+
+## Google Drive fallback
+
+Google Drive chỉ được thử sau khi Cloudflare thất bại. App tải manifest công khai từ `UPDATE_URL` trong [DataSyncConfig.java](app/src/main/java/com/android/acerem/xemgp/data/DataSyncConfig.java):
+
+```text
 version=1
 data=https://drive.google.com/uc?export=download&id=DATA_FILE_ID
 images=https://drive.google.com/uc?export=download&id=IMAGES_FILE_ID
 ```
 
-Nếu phiên bản không có ảnh, để trống:
+`images=` có thể để trống. Có thể thêm `dataSize=` và `contentHash=` để kiểm tra integrity cho Google Drive. Bộ tải xử lý redirect/confirmation của Drive, chống cache và từ chối HTML/trang lỗi. Không có file picker hoặc nhập `data.enc`/ZIP thủ công.
 
-```text
-version=2
-data=https://drive.google.com/uc?export=download&id=DATA_FILE_ID
-images=
+## Mã hóa và đăng nhập
+
+Envelope được giữ nguyên:
+
+```json
+{
+  "v": 1,
+  "algorithm": "AES-GCM",
+  "kdf": "PBKDF2-SHA-256",
+  "iterations": 210000,
+  "salt": "...",
+  "iv": "...",
+  "ciphertext": "..."
+}
 ```
 
-Mỗi file cần được chia sẻ công khai với quyền Viewer. Bộ tải chuyển URL Google Drive về request tải file, xử lý redirect/confirmation nếu Google yêu cầu, chống cache cho `update.txt` và từ chối HTML/trang lỗi.
+Password viewer chỉ tồn tại ở Android và không bao giờ được gửi tới Worker, R2 hoặc Google Drive. Tải source thành công nhưng password sai chỉ hiển thị lỗi đăng nhập; không kích hoạt fallback source.
 
-Không cần Google API, API key, OAuth hay backend. `data.enc` phải là file blob/encrypted file thông thường; không dùng Google Docs/Sheets/Slides export.
-
-## Luồng cập nhật
-
-Khi mở app, `DataSyncManager` kiểm tra mạng, tải `update.txt` với request no-cache và query chống cache, parse version cùng hai URL rồi so sánh với version local.
-
-- Remote version bằng hoặc thấp hơn local: dùng dữ liệu local.
-- Remote version cao hơn: tải `data.enc` và `images.zip` vào file tạm.
-- Chỉ sau khi envelope, ZIP và quá trình giải mã/xử lý hợp lệ mới cài dữ liệu và ghi version local.
-- Nếu lỗi, file tạm bị xóa và dữ liệu local cũ vẫn được giữ nguyên.
-- Nếu `images=`, ảnh local hiện tại được giữ lại khi chuyển sang fingerprint dữ liệu mới.
-- Không có Internet vẫn dùng dữ liệu local hợp lệ; cài mới không có dữ liệu sẽ yêu cầu kết nối.
-
-Để phát hành bản cập nhật: upload file mới lên Google Drive, lấy link tải công khai, sửa các dòng `data=`/ `images=` trong `update.txt`, tăng `version`, rồi lưu `update.txt`. Không cần backend hoặc server chạy 24/7.
+`DataRepository` chỉ giữ dữ liệu đã đồng bộ để Login/Viewer và ảnh hiện tại có thể đọc trong phiên ứng dụng. Nó không được dùng để chọn source, fallback offline hoặc bỏ qua hai nguồn online.
 
 ## Build
 
@@ -56,9 +65,3 @@ Khi mở app, `DataSyncManager` kiểm tra mạng, tải `update.txt` với requ
 ```bash
 ./gradlew assembleDebug
 ```
-
-## Bảo toàn dữ liệu hiện tại
-
-Cơ chế envelope AES-GCM, PBKDF2, mật khẩu, schema plaintext sau giải mã, database/model, Login, Viewer và xử lý ảnh root-level (`webp`, `jpg/jpeg`, `png`) được giữ nguyên. `DataRepository` vẫn quản lý fingerprint local và commit file tải xuống an toàn.
-
-Ảnh vẫn được lưu ở `files/families/<sha256>/images/`; session ghi nhớ vẫn bị vô hiệu khi fingerprint dữ liệu đổi.

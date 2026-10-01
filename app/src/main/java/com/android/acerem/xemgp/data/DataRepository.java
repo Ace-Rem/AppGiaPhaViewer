@@ -1,7 +1,6 @@
 package com.android.acerem.xemgp.data;
 
 import android.content.Context;
-import android.net.Uri;
 import android.graphics.BitmapFactory;
 import android.util.Base64;
 import org.json.JSONArray;
@@ -18,48 +17,27 @@ public final class DataRepository {
     public interface Progress { void onProgress(int done, int total); }
     private static final String PREFS = "family-tree-local";
     private static final String CURRENT = "current-family";
-    private static final String DATA_VERSION = "data-version";
     private static final long MAX_IMAGE_BYTES = 50L * 1024 * 1024;
     private DataRepository() {}
 
     public static File root(Context c) { File f = new File(c.getFilesDir(), "families"); if (!f.exists()) f.mkdirs(); return f; }
     public static String currentFingerprint(Context c) { return c.getSharedPreferences(PREFS, 0).getString(CURRENT, null); }
     public static void setCurrentFingerprint(Context c, String fp) { c.getSharedPreferences(PREFS, 0).edit().putString(CURRENT, fp).apply(); }
-    public static long localDataVersion(Context c) { return c.getSharedPreferences(PREFS, 0).getLong(DATA_VERSION, -1); }
-    public static void setLocalDataVersion(Context c, long version) { c.getSharedPreferences(PREFS, 0).edit().putLong(DATA_VERSION, version).apply(); }
     public static File familyDir(Context c, String fp) { return new File(root(c), fp); }
     public static File dataFile(Context c) { String fp = currentFingerprint(c); return fp == null ? null : new File(familyDir(c, fp), "data.enc"); }
     public static File imageDir(Context c) { String fp = currentFingerprint(c); return fp == null ? null : new File(familyDir(c, fp), "images"); }
     public static File imageFile(Context c, String fp, String filename) { return new File(new File(familyDir(c, fp), "images"), filename); }
-    public static boolean hasValidCurrentData(Context c) {
-        File file = dataFile(c);
-        if (file == null || !file.isFile()) return false;
-        try { validateEnvelope(new String(readFile(file), StandardCharsets.UTF_8)); return true; }
-        catch (Exception ignored) { return false; }
-    }
-
     public static void validateEnvelope(String text) throws Exception {
         JSONObject e = new JSONObject(text);
         if (e.optInt("v", -1) != 1 || !"AES-GCM".equals(e.optString("algorithm"))
+                || !"PBKDF2-SHA-256".equals(e.optString("kdf")) || e.optInt("iterations", -1) != 210000
                 || e.optString("salt").isEmpty() || e.optString("iv").isEmpty() || e.optString("ciphertext").isEmpty()) {
             throw new IllegalArgumentException("invalid-envelope");
         }
-        Base64.decode(e.getString("salt"), Base64.DEFAULT);
-        Base64.decode(e.getString("iv"), Base64.DEFAULT);
-        Base64.decode(e.getString("ciphertext"), Base64.DEFAULT);
-    }
-
-    public static String importData(Context c, Uri uri) throws Exception { return installBytes(c, readAll(c, uri)); }
-    private static String installBytes(Context c, byte[] bytes) throws Exception {
-        validateEnvelope(new String(bytes, StandardCharsets.UTF_8));
-        String fp = sha256(bytes);
-        File dir = familyDir(c, fp);
-        if (!dir.exists() && !dir.mkdirs()) throw new IOException("cannot-create-family");
-        File temp = new File(dir, ".data-" + UUID.randomUUID());
-        try { writeBytes(temp, bytes); moveReplace(temp, new File(dir, "data.enc")); }
-        finally { if (temp.exists()) temp.delete(); }
-        setCurrentFingerprint(c, fp);
-        return fp;
+        byte[] salt = Base64.decode(e.getString("salt"), Base64.DEFAULT);
+        byte[] iv = Base64.decode(e.getString("iv"), Base64.DEFAULT);
+        byte[] ciphertext = Base64.decode(e.getString("ciphertext"), Base64.DEFAULT);
+        if (salt.length == 0 || iv.length == 0 || ciphertext.length == 0) throw new IllegalArgumentException("invalid-envelope");
     }
 
     /** Commits a downloaded file only after validation and optional image processing succeed. */
@@ -84,29 +62,10 @@ public final class DataRepository {
         if (file == null || !file.isFile()) throw new FileNotFoundException("data-unavailable");
         return new String(readFile(file), StandardCharsets.UTF_8);
     }
-    public static byte[] readAll(Context c, Uri uri) throws IOException {
-        try (InputStream in = c.getContentResolver().openInputStream(uri); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            if (in == null) throw new IOException("file-unavailable");
-            byte[] buffer = new byte[32 * 1024]; int n;
-            while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
-            return out.toByteArray();
-        }
-    }
     private static byte[] readFile(File file) throws IOException { try (InputStream in = new FileInputStream(file); ByteArrayOutputStream out = new ByteArrayOutputStream()) { byte[] b = new byte[32 * 1024]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); return out.toByteArray(); } }
     private static void writeBytes(File f, byte[] bytes) throws IOException { try (FileOutputStream out = new FileOutputStream(f)) { out.write(bytes); out.getFD().sync(); } }
     private static String sha256(byte[] bytes) throws Exception { byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes); StringBuilder result = new StringBuilder(); for (byte b : digest) result.append(String.format(Locale.US, "%02x", b)); return result.toString(); }
     private static void moveReplace(File source, File target) throws IOException { if (target.exists() && !target.delete()) throw new IOException("cannot-replace-file"); if (!source.renameTo(target)) { try (InputStream in = new FileInputStream(source); OutputStream out = new FileOutputStream(target)) { byte[] b = new byte[32*1024]; int n; while ((n=in.read(b))!=-1) out.write(b,0,n); } if (!source.delete()) throw new IOException("cannot-clean-temp"); } }
-
-    public static int extractImages(Context c, Uri uri, String fp, Progress progress) throws Exception {
-        File temp = new File(familyDir(c, fp), ".images-" + UUID.randomUUID());
-        if (!temp.getParentFile().exists() && !temp.getParentFile().mkdirs()) throw new IOException("cannot-create-family");
-        if (!temp.mkdirs()) throw new IOException("cannot-create-temp");
-        try {
-            int total = 0; try (InputStream raw = requireStream(c.getContentResolver().openInputStream(uri)); ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw))) { ZipEntry e; while ((e=zip.getNextEntry())!=null) if(!e.isDirectory()&&isRootImage(e.getName())) total++; }
-            int done=0, accepted=0; try (InputStream raw = requireStream(c.getContentResolver().openInputStream(uri)); ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw))) { accepted=extractEntries(zip,temp,total,progress); }
-            return commitImages(temp,familyDir(c,fp),accepted);
-        } finally { deleteTree(temp); }
-    }
 
     public static int extractImages(Context c, File file, String fp, Progress progress) throws Exception {
         File family = familyDir(c, fp); if (!family.exists() && !family.mkdirs()) throw new IOException("cannot-create-family");
@@ -124,7 +83,6 @@ public final class DataRepository {
         return accepted;
     }
     private static int commitImages(File temp, File family, int accepted) throws IOException { File live=new File(family,"images");if(!live.exists()&&!live.mkdirs())throw new IOException("cannot-create-images");File[] files=temp.listFiles();if(files!=null)for(File image:files)moveReplace(image,new File(live,image.getName()));return accepted; }
-    private static InputStream requireStream(InputStream input) throws IOException { if(input==null)throw new IOException("file-unavailable");return input; }
     private static boolean isRootImage(String name) { if(name==null||name.isEmpty()||name.contains("/")||name.contains("\\")||name.contains(".."))return false;String n=name.toLowerCase(Locale.US);return n.endsWith(".webp")||n.endsWith(".jpg")||n.endsWith(".jpeg")||n.endsWith(".png"); }
     private static void deleteTree(File f) { if(f==null||!f.exists())return;if(f.isDirectory()){File[] files=f.listFiles();if(files!=null)for(File x:files)deleteTree(x);}f.delete(); }
 
